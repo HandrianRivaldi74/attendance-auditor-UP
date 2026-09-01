@@ -1,4 +1,4 @@
-# Pemeriksa Absensi & Struk Gaji - PT. URASE PRIMA
+# Pemeriksa Absensi & Struk Gaji
 
 ## Cara jalankan
 ```
