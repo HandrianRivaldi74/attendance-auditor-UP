@@ -9,10 +9,22 @@ Struktur tabel per baris karyawan (hasil extract_table pdfplumber):
  U.BERSIH, KETERANGAN, TTD]
 
 Baris "TOTAL ..." adalah subtotal per bagian/departemen, bukan data karyawan - dilewati.
+
+Konteks mode (Sipil vs Normal) dilekatkan pada setiap baris struk:
+- Mode Sipil : HKP struk = nilai tercetak dokumen; tidak dihitung ulang.
+- Mode Normal: HKP tercetak tetap disimpan; HKP audit memakai rumus otomatis
+  dari data absensi (lihat terapkan_konteks_mode).
 """
 
 import re
 import pdfplumber
+
+import rules
+
+
+def _lapor(progress, persen, pesan=""):
+    if progress:
+        progress(int(max(0, min(100, persen))), pesan)
 
 
 def _to_float(s):
@@ -48,25 +60,23 @@ def _split_multiline(cell, n):
     return vals[:n]
 
 
-def parse_struk_gaji(pdf_path):
+def parse_struk_gaji(pdf_path, mode=None, progress=None):
     """
-    Mengembalikan list of dict, satu per karyawan:
-    {
-        nrp, nama, departemen, bagian,
-        hkl, ll, hkp, ijin, dirumahkan,
-        u_pokok, u_lembur, u_lembur_libur, upah_ijin, upah_dirumahkan,
-        u_lain_lain, transport, tunjangan, t_jabatan, t_khusus,
-        upah_kotor, bpjs_kt, bpjs_ks, pot_lain, u_bersih
-    }
+    Mengembalikan list of dict, satu per karyawan.
+    Kolom HKP dibaca apa adanya dari tabel struk (tidak dihitung ulang di parser).
+    mode: rules.MODE_SIPIL atau rules.MODE_NORMAL — dilekatkan ke setiap baris.
+    progress(persen, pesan) untuk UI thread-safe via queue.
     """
+    mode = rules.normalisasi_mode(mode)
+    mode_label, aturan = rules.deskripsi_mode(mode)
     karyawan_list = []
     departemen, bagian = None, None
-    # antrian label DEPARTEMENT/BAGIAN global (FIFO) - perlu ini karena kadang
-    # header dicetak di akhir halaman N tapi tabelnya baru muncul di halaman N+1
     pending_labels = []
 
+    _lapor(progress, 1, f"Membuka PDF struk gaji ({mode_label})...")
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
+        n_hal = len(pdf.pages) or 1
+        for pi, page in enumerate(pdf.pages):
             text = page.extract_text() or ""
             deps = [d.strip() for d in re.findall(r"DEPARTEMENT\s+([A-Z0-9 .,/-]+)", text)]
             bags = [b.strip() for b in re.findall(r"BAGIAN\s+([A-Z0-9 .,/-]+)", text)]
@@ -87,7 +97,7 @@ def parse_struk_gaji(pdf_path):
                         continue
                     no_cell = (row[0] or "").strip()
                     if not no_cell.isdigit():
-                        continue  # lewati header/TOTAL/baris lain
+                        continue
 
                     nrp_nama = (row[1] or "").split("\n")
                     nrp = nrp_nama[0].strip() if nrp_nama else None
@@ -96,15 +106,17 @@ def parse_struk_gaji(pdf_path):
                     u_lain, transport = _split_multiline(row[12], 2)
                     tunjangan, t_jabatan, t_khusus = _split_multiline(row[13], 3)
                     bpjs_kt, bpjs_ks, pot_lain = _split_multiline(row[15], 3)
+                    hkp_dokumen = _to_float(row[4])
 
-                    karyawan_list.append({
+                    rec = {
                         "nrp": nrp,
                         "nama": nama,
                         "departemen": departemen,
                         "bagian": bagian,
                         "hkl": _to_float(row[2]),
                         "ll": _to_float(row[3]),
-                        "hkp": _to_float(row[4]),
+                        "hkp": hkp_dokumen,
+                        "hkp_dokumen": hkp_dokumen,
                         "ijin": _to_int(row[5]),
                         "dirumahkan": _to_int(row[6]),
                         "u_pokok": _to_float(row[7]),
@@ -122,8 +134,83 @@ def parse_struk_gaji(pdf_path):
                         "bpjs_ks": bpjs_ks,
                         "pot_lain": pot_lain,
                         "u_bersih": _to_float(row[16]),
-                    })
+                        "mode": mode,
+                        "mode_label": mode_label,
+                        "aturan_mode": aturan,
+                    }
+                    karyawan_list.append(rec)
+
+            _lapor(progress, 5 + int(80 * (pi + 1) / n_hal),
+                   f"Parse struk gaji halaman {pi + 1}/{n_hal} ({len(karyawan_list)} karyawan)")
+
+    terapkan_konteks_mode(karyawan_list, data_absensi=None, mode=mode, progress=None)
+    _lapor(progress, 100, f"Selesai parse struk gaji ({len(karyawan_list)} karyawan, {mode_label})")
     return karyawan_list
+
+
+def terapkan_konteks_mode(data_gaji, data_absensi=None, mode=None, progress=None):
+    """
+    Lengkapi setiap baris struk dengan HKP sesuai mode aktif.
+    Mode Sipil : hkp_dipakai = HKP tercetak dokumen; hitung otomatis tidak dijalankan.
+    Mode Normal: hkp_dipakai = hasil rules.hitung_hkp dari absensi (jika ada);
+                 HKP tercetak tetap disimpan di hkp / hkp_dokumen.
+    """
+    if not data_gaji:
+        return data_gaji
+    mode = rules.normalisasi_mode(mode if mode is not None else data_gaji[0].get("mode"))
+    mode_label, aturan = rules.deskripsi_mode(mode)
+    by_absen = {k["id"]: k for k in (data_absensi or [])}
+    n = len(data_gaji)
+
+    for i, g in enumerate(data_gaji):
+        g["mode"] = mode
+        g["mode_label"] = mode_label
+        g["aturan_mode"] = aturan
+        g["hkp_dokumen"] = g.get("hkp_dokumen", g.get("hkp"))
+
+        if mode == rules.MODE_SIPIL:
+            g["hkp_hitung_otomatis"] = None
+            g["hkp_batas_group"] = None
+            g["hkp_dipakai"] = g.get("hkp_dokumen")
+            g["sumber_hkp"] = "dokumen struk (manual, tidak dihitung ulang)"
+            g["catatan_hkp"] = (
+                "Mode Sipil: rincian gaji memakai HKP tercetak dokumen. "
+                "Rumus HKP otomatis (batas group − izin) tidak dijalankan."
+            )
+        else:
+            absen = by_absen.get(g.get("nrp"))
+            if absen:
+                hkp_hitung, batas, ada_tidak_steril = rules.hitung_hkp(absen)
+                g["hkp_hitung_otomatis"] = hkp_hitung
+                g["hkp_batas_group"] = batas
+                g["hkp_dipakai"] = hkp_hitung
+                g["sumber_hkp"] = "hitung otomatis absensi (batas group − izin)"
+                if ada_tidak_steril:
+                    g["catatan_hkp"] = (
+                        f"Mode Normal: data izin belum steril ('?'). "
+                        f"HKP tercetak struk = {g.get('hkp_dokumen')}; hitung otomatis ditunda."
+                    )
+                    g["hkp_dipakai"] = None
+                else:
+                    g["catatan_hkp"] = (
+                        f"Mode Normal: HKP otomatis = {hkp_hitung} (batas group {batas}). "
+                        f"HKP tercetak struk = {g.get('hkp_dokumen')}."
+                    )
+            else:
+                g["hkp_hitung_otomatis"] = None
+                g["hkp_batas_group"] = None
+                g["hkp_dipakai"] = None
+                g["sumber_hkp"] = "menunggu data absensi (rumus otomatis)"
+                g["catatan_hkp"] = (
+                    "Mode Normal: absensi belum cocok NRP ini. "
+                    f"HKP tercetak struk = {g.get('hkp_dokumen')} disimpan, "
+                    "belum diganti rumus otomatis."
+                )
+
+        if i % 5 == 0 or i + 1 == n:
+            _lapor(progress, 100 * (i + 1) / n,
+                   f"Konteks mode struk gaji {i + 1}/{n} ({mode_label})")
+    return data_gaji
 
 
 if __name__ == "__main__":
