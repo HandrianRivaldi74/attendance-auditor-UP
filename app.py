@@ -26,7 +26,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Pemeriksa Absensi & Struk Gaji - PT. URASE PRIMA")
-        self.geometry("1180x800")
+        self.geometry("1360x880")
+        self.minsize(1180, 720)
 
         self.data_absensi = []
         self.anomali_absensi = []
@@ -43,6 +44,7 @@ class App(tk.Tk):
         self._ui_queue = queue.Queue()
         self._tombol = []
 
+        self._setup_style()
         self._build_ui()
         self.after(40, self._proses_antrian_ui)
         self._catat_log("Aplikasi siap. Pilih mode, lalu buka PDF absensi.")
@@ -54,64 +56,201 @@ class App(tk.Tk):
         label, aturan = rules.deskripsi_mode(self._mode_aktif())
         return f"Aktif: {label}  |  Aturan: {aturan}"
 
+    # ---------- Tema & Style ----------
+    COLORS = {
+        "bg": "#f3f5fa",
+        "card_bg": "#ffffff",
+        "header_bg": "#173b7a",
+        "header_bg2": "#2454a6",
+        "primary": "#2454a6",
+        "primary_dark": "#173b7a",
+        "accent": "#0e8f6e",
+        "accent_dark": "#0b7259",
+        "warn": "#c98a12",
+        "danger": "#c0392b",
+        "text": "#1f2937",
+        "muted": "#64748b",
+        "border": "#dde3ee",
+        "tab_bg": "#e6ebf5",
+        "ok_bg": "#e6f7ef",
+        "ok_fg": "#0f5132",
+        "bad_bg": "#fdecea",
+        "bad_fg": "#7a1f1f",
+    }
+
+    def _setup_style(self):
+        C = self.COLORS
+        self.configure(bg=C["bg"])
+
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        base_font = ("Segoe UI", 9)
+        bold_font = ("Segoe UI", 9, "bold")
+
+        style.configure(".", font=base_font, background=C["bg"], foreground=C["text"])
+        style.configure("TFrame", background=C["bg"])
+        style.configure("TLabel", background=C["bg"], foreground=C["text"])
+        style.configure("Muted.TLabel", background=C["bg"], foreground=C["muted"])
+        style.configure("CardTitle.TLabel", background=C["card_bg"], foreground=C["primary_dark"],
+                        font=("Segoe UI", 10, "bold"))
+        style.configure("CardStatus.TLabel", background=C["card_bg"], foreground=C["muted"],
+                        font=("Segoe UI", 8, "italic"))
+        style.configure("Mode.TLabel", background=C["bg"], foreground=C["primary_dark"],
+                        font=("Segoe UI", 9, "bold"))
+
+        style.configure("Card.TFrame", background=C["card_bg"], relief="solid", borderwidth=1)
+        style.configure("Card.TLabel", background=C["card_bg"], foreground=C["text"])
+
+        # Tombol tahap (biru) & tombol aksi utama/hijau (bandingkan)
+        style.configure("Step.TButton", font=base_font, padding=(10, 7),
+                        background="#eef2f9", foreground=C["primary_dark"], borderwidth=1,
+                        focusthickness=0)
+        style.map("Step.TButton",
+                  background=[("active", "#dfe7f5"), ("disabled", "#f1f3f7")],
+                  foreground=[("disabled", "#a7b0c0")])
+
+        style.configure("Accent.TButton", font=bold_font, padding=(10, 8),
+                        background=C["accent"], foreground="white", borderwidth=0)
+        style.map("Accent.TButton",
+                  background=[("active", C["accent_dark"]), ("disabled", "#a7d9c7")],
+                  foreground=[("disabled", "#eefaf5")])
+
+        style.configure("Export.TButton", font=bold_font, padding=(14, 9),
+                        background=C["primary"], foreground="white", borderwidth=0)
+        style.map("Export.TButton",
+                  background=[("active", C["primary_dark"]), ("disabled", "#9fb4d6")],
+                  foreground=[("disabled", "#eaf0fb")])
+
+        style.configure("TRadiobutton", background=C["bg"], foreground=C["text"], font=base_font)
+
+        style.configure("TLabelframe", background=C["bg"], foreground=C["primary_dark"],
+                        borderwidth=1, relief="solid")
+        style.configure("TLabelframe.Label", background=C["bg"], foreground=C["primary_dark"],
+                        font=bold_font)
+
+        style.configure("Horizontal.TProgressbar", troughcolor="#e4e9f2",
+                        background=C["accent"], bordercolor="#e4e9f2",
+                        lightcolor=C["accent"], darkcolor=C["accent"], thickness=14)
+
+        style.configure("TNotebook", background=C["bg"], borderwidth=0, tabmargins=(6, 6, 6, 0))
+        style.configure("TNotebook.Tab", background=C["tab_bg"], foreground=C["text"],
+                        font=base_font, padding=(10, 6))
+        style.map("TNotebook.Tab",
+                  background=[("selected", C["card_bg"])],
+                  foreground=[("selected", C["primary_dark"])],
+                  font=[("selected", bold_font)])
+
+        style.configure("Treeview", font=base_font, rowheight=25, background="white",
+                        fieldbackground="white", foreground=C["text"], borderwidth=0)
+        style.configure("Treeview.Heading", font=bold_font, background=C["primary"],
+                        foreground="white", relief="flat", padding=(6, 6))
+        style.map("Treeview.Heading", background=[("active", C["primary_dark"])])
+        style.map("Treeview", background=[("selected", C["primary"])],
+                  foreground=[("selected", "white")])
+
+        style.configure("Status.TLabel", background="#eef2f9", foreground=C["text"],
+                        font=base_font, padding=(8, 5))
+
     # ---------- UI ----------
     def _build_ui(self):
-        top = ttk.Frame(self, padding=8)
-        top.pack(fill="x")
+        C = self.COLORS
 
-        self.btn_absensi = ttk.Button(top, text="1. Buka PDF Absensi", command=self.buka_absensi)
-        self.btn_absensi.pack(side="left", padx=4)
-        self.lbl_absensi = ttk.Label(top, text="belum ada file")
-        self.lbl_absensi.pack(side="left", padx=4)
+        # ===== Header banner =====
+        header = tk.Frame(self, bg=C["header_bg"])
+        header.pack(fill="x")
+        header_in = tk.Frame(header, bg=C["header_bg"])
+        header_in.pack(fill="x", padx=18, pady=12)
+        header_in.columnconfigure(0, weight=1)
 
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
+        judul_box = tk.Frame(header_in, bg=C["header_bg"])
+        judul_box.grid(row=0, column=0, sticky="w")
+        tk.Label(judul_box, text="📊 Pemeriksa Absensi & Struk Gaji", bg=C["header_bg"],
+                 fg="white", font=("Segoe UI", 15, "bold")).pack(anchor="w")
+        tk.Label(judul_box, text="PT. URASE PRIMA — Audit Absensi, Gaji, Pengupahan & Transfer Bank",
+                 bg=C["header_bg"], fg="#c7d5ee", font=("Segoe UI", 9)).pack(anchor="w")
 
-        self.btn_gaji = ttk.Button(top, text="2. Buka PDF Struk Gaji", command=self.buka_gaji)
-        self.btn_gaji.pack(side="left", padx=4)
-        self.lbl_gaji = ttk.Label(top, text="belum ada file")
-        self.lbl_gaji.pack(side="left", padx=4)
+        self.btn_ekspor = ttk.Button(header_in, text="⬇ Ekspor ke Excel", style="Export.TButton",
+                                     command=self.ekspor)
+        self.btn_ekspor.grid(row=0, column=1, sticky="e", padx=(12, 0))
 
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
+        # ===== Baris kartu tahapan (responsif: 3 kolom, lebar proporsional) =====
+        cards_wrap = ttk.Frame(self, padding=(12, 10, 12, 4))
+        cards_wrap.pack(fill="x")
+        cards_wrap.columnconfigure(0, weight=1, uniform="cards")
+        cards_wrap.columnconfigure(1, weight=1, uniform="cards")
+        cards_wrap.columnconfigure(2, weight=1, uniform="cards")
 
-        self.btn_banding = ttk.Button(top, text="3. Bandingkan", command=self.jalankan_banding)
-        self.btn_banding.pack(side="left", padx=4)
-        self.btn_ekspor = ttk.Button(top, text="Ekspor ke Excel", command=self.ekspor)
-        self.btn_ekspor.pack(side="left", padx=4)
+        # -- Kartu 1: Absensi & Struk Gaji --
+        card1 = ttk.LabelFrame(cards_wrap, text=" 🗂️  Absensi & Struk Gaji ", padding=10)
+        card1.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        card1.columnconfigure(0, weight=1)
 
-        top2 = ttk.Frame(self, padding=(8, 0, 8, 8))
-        top2.pack(fill="x")
+        self.btn_absensi = ttk.Button(card1, text="1. Buka PDF Absensi", style="Step.TButton",
+                                      command=self.buka_absensi)
+        self.btn_absensi.grid(row=0, column=0, sticky="ew", pady=(0, 3))
+        self.lbl_absensi = ttk.Label(card1, text="belum ada file", style="Muted.TLabel", wraplength=280)
+        self.lbl_absensi.grid(row=1, column=0, sticky="w", pady=(0, 8))
 
-        self.btn_pengupahan = ttk.Button(top2, text="4. Buka PDF Laporan Pengupahan", command=self.buka_pengupahan)
-        self.btn_pengupahan.pack(side="left", padx=4)
-        self.lbl_pengupahan = ttk.Label(top2, text="belum ada file")
-        self.lbl_pengupahan.pack(side="left", padx=4)
+        self.btn_gaji = ttk.Button(card1, text="2. Buka PDF Struk Gaji", style="Step.TButton",
+                                   command=self.buka_gaji)
+        self.btn_gaji.grid(row=2, column=0, sticky="ew", pady=(0, 3))
+        self.lbl_gaji = ttk.Label(card1, text="belum ada file", style="Muted.TLabel", wraplength=280)
+        self.lbl_gaji.grid(row=3, column=0, sticky="w", pady=(0, 8))
 
-        ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
+        self.btn_banding = ttk.Button(card1, text="3. Bandingkan Absensi vs Struk Gaji", style="Accent.TButton",
+                                      command=self.jalankan_banding)
+        self.btn_banding.grid(row=4, column=0, sticky="ew")
+
+        # -- Kartu 2: Laporan Pengupahan --
+        card2 = ttk.LabelFrame(cards_wrap, text=" 🧾  Laporan Pengupahan ", padding=10)
+        card2.grid(row=0, column=1, sticky="nsew", padx=6)
+        card2.columnconfigure(0, weight=1)
+
+        self.btn_pengupahan = ttk.Button(card2, text="4. Buka PDF Laporan Pengupahan", style="Step.TButton",
+                                         command=self.buka_pengupahan)
+        self.btn_pengupahan.grid(row=0, column=0, sticky="ew", pady=(0, 3))
+        self.lbl_pengupahan = ttk.Label(card2, text="belum ada file", style="Muted.TLabel", wraplength=280)
+        self.lbl_pengupahan.grid(row=1, column=0, sticky="w", pady=(0, 8))
+
+        # spacer supaya tombol "Bandingkan" sejajar vertikal dengan kartu lain
+        ttk.Frame(card2).grid(row=2, column=0, sticky="ew", pady=(0, 3))
+        ttk.Label(card2, text="").grid(row=3, column=0, pady=(0, 8))
 
         self.btn_banding_pengupahan = ttk.Button(
-            top2, text="5. Bandingkan Pengupahan vs Struk Gaji", command=self.jalankan_banding_pengupahan)
-        self.btn_banding_pengupahan.pack(side="left", padx=4)
+            card2, text="5. Bandingkan vs Struk Gaji", style="Accent.TButton",
+            command=self.jalankan_banding_pengupahan)
+        self.btn_banding_pengupahan.grid(row=4, column=0, sticky="ew")
 
-        top3 = ttk.Frame(self, padding=(8, 0, 8, 8))
-        top3.pack(fill="x")
+        # -- Kartu 3: Transfer Bank --
+        card3 = ttk.LabelFrame(cards_wrap, text=" 🏦  Transfer Bank ", padding=10)
+        card3.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
+        card3.columnconfigure(0, weight=1)
 
-        self.btn_bank = ttk.Button(top3, text="6. Buka Excel Transfer Bank", command=self.buka_bank)
-        self.btn_bank.pack(side="left", padx=4)
-        self.lbl_bank = ttk.Label(top3, text="belum ada file")
-        self.lbl_bank.pack(side="left", padx=4)
+        self.btn_bank = ttk.Button(card3, text="6. Buka Excel Transfer Bank", style="Step.TButton",
+                                   command=self.buka_bank)
+        self.btn_bank.grid(row=0, column=0, sticky="ew", pady=(0, 3))
+        self.lbl_bank = ttk.Label(card3, text="belum ada file", style="Muted.TLabel", wraplength=280)
+        self.lbl_bank.grid(row=1, column=0, sticky="w", pady=(0, 8))
 
-        ttk.Separator(top3, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Label(card3, text="").grid(row=2, column=0, sticky="ew", pady=(0, 3))
+        ttk.Label(card3, text="").grid(row=3, column=0, pady=(0, 8))
 
         self.btn_banding_bank = ttk.Button(
-            top3, text="7. Bandingkan Transfer Bank vs Struk Gaji", command=self.jalankan_banding_bank)
-        self.btn_banding_bank.pack(side="left", padx=4)
+            card3, text="7. Bandingkan vs Struk Gaji", style="Accent.TButton",
+            command=self.jalankan_banding_bank)
+        self.btn_banding_bank.grid(row=4, column=0, sticky="ew")
 
         self._tombol = [self.btn_absensi, self.btn_gaji, self.btn_banding, self.btn_ekspor,
                         self.btn_pengupahan, self.btn_banding_pengupahan,
                         self.btn_bank, self.btn_banding_bank]
 
-        mode_bar = ttk.LabelFrame(self, text="Mode Pemrosesan (pilih sebelum audit / banding)", padding=6)
-        mode_bar.pack(fill="x", padx=8, pady=(0, 4))
+        # ===== Mode pemrosesan =====
+        mode_bar = ttk.LabelFrame(self, text=" ⚙ Mode Pemrosesan (pilih sebelum audit / banding) ", padding=8)
+        mode_bar.pack(fill="x", padx=12, pady=(6, 4))
 
         self.rb_normal = ttk.Radiobutton(
             mode_bar, text="Mode Normal — HKP dihitung otomatis (batas group − izin)",
@@ -126,10 +265,12 @@ class App(tk.Tk):
         )
         self.rb_sipil.pack(side="left", padx=8)
 
-        self.lbl_mode = ttk.Label(self, text=self._teks_status_mode(), foreground="#1a365d")
-        self.lbl_mode.pack(fill="x", padx=10, pady=(0, 2))
+        self.lbl_mode = ttk.Label(self, text=self._teks_status_mode(), style="Mode.TLabel",
+                                  wraplength=1100, justify="left")
+        self.lbl_mode.pack(fill="x", padx=16, pady=(0, 2))
 
-        prog = ttk.Frame(self, padding=(8, 0, 8, 4))
+        # ===== Progres =====
+        prog = ttk.Frame(self, padding=(12, 2, 12, 6))
         prog.pack(fill="x")
         ttk.Label(prog, text="Progres:").pack(side="left")
         self.progress = ttk.Progressbar(prog, orient="horizontal", mode="determinate",
@@ -137,74 +278,116 @@ class App(tk.Tk):
         self.progress.pack(side="left", fill="x", expand=True, padx=8)
         self.lbl_persen = ttk.Label(prog, text="0%", width=6)
         self.lbl_persen.pack(side="left")
-        self.lbl_progres_teks = ttk.Label(self, text="Siap.", foreground="#444")
-        self.lbl_progres_teks.pack(fill="x", padx=10)
+        self.lbl_progres_teks = ttk.Label(self, text="Siap.", style="Muted.TLabel",
+                                          wraplength=1100, justify="left")
+        self.lbl_progres_teks.pack(fill="x", padx=16)
 
+        # ===== Notebook (tab hasil) =====
         self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
+        self.notebook.pack(fill="both", expand=True, padx=12, pady=10)
 
         frame1 = ttk.Frame(self.notebook)
-        self.notebook.add(frame1, text="Anomali Absensi")
-        self.tree_anomali = self._buat_tabel(frame1, ["NRP", "Nama", "Aturan", "Detail", "Tanggal"])
+        self.notebook.add(frame1, text="⚠ Anomali Absensi")
+        self.tree_anomali = self._buat_tabel(
+            frame1, ["NRP", "Nama", "Aturan", "Detail", "Tanggal"],
+            lebar=[80, 170, 230, 420, 80], stretch_kolom="Detail")
 
         frame2 = ttk.Frame(self.notebook)
-        self.notebook.add(frame2, text="Banding Absensi vs Struk Gaji")
+        self.notebook.add(frame2, text="⇄ Banding Absensi")
         self.tree_banding = self._buat_tabel(
             frame2, ["NRP", "Nama (Absensi)", "Nama (Struk Gaji)", "Status",
-                     "Mode", "Sumber HKP", "Detail Perbedaan"])
+                     "Mode", "Sumber HKP", "Detail Perbedaan"],
+            lebar=[90, 170, 170, 160, 90, 200, 420])
 
         frame_gaji = ttk.Frame(self.notebook)
-        self.notebook.add(frame_gaji, text="Struk Gaji")
+        self.notebook.add(frame_gaji, text="💵 Struk Gaji")
         self.tree_gaji = self._buat_tabel(
             frame_gaji,
             ["NRP", "Nama", "Mode", "Sumber HKP", "HKP dokumen", "HKP dipakai",
-             "HKP otomatis", "U.Pokok", "Upah Kotor", "U.Bersih", "Catatan HKP"])
+             "HKP otomatis", "U.Pokok", "Upah Kotor", "U.Bersih", "Catatan HKP"],
+            lebar=[90, 170, 90, 200, 100, 100, 100, 110, 110, 110, 400])
 
         frame_pengupahan = ttk.Frame(self.notebook)
-        self.notebook.add(frame_pengupahan, text="Laporan Pengupahan")
+        self.notebook.add(frame_pengupahan, text="🧾 Pengupahan")
         self.tree_pengupahan = self._buat_tabel(
             frame_pengupahan,
             ["NRP", "Nama", "Bagian", "Bagian/Departemen", "Upah Kotor",
-             "BPJS Kesehatan", "BPJS Tenaga Kerja", "Pot. Lain-lain", "Upah Bersih"])
+             "BPJS Kesehatan", "BPJS Tenaga Kerja", "Pot. Lain-lain", "Upah Bersih"],
+            lebar=[90, 180, 150, 170, 120, 130, 140, 120, 120])
 
         frame_banding_pengupahan = ttk.Frame(self.notebook)
-        self.notebook.add(frame_banding_pengupahan, text="Banding Pengupahan")
+        self.notebook.add(frame_banding_pengupahan, text="⇄ Banding Pengupahan")
         self.tree_banding_pengupahan = self._buat_tabel(
             frame_banding_pengupahan,
-            ["NRP", "Nama (Pengupahan)", "Nama (Struk Gaji)", "Status", "Detail Perbedaan"])
+            ["NRP", "Nama (Pengupahan)", "Nama (Struk Gaji)", "Status", "Detail Perbedaan"],
+            lebar=[90, 190, 190, 220, 400])
 
         frame_bank = ttk.Frame(self.notebook)
-        self.notebook.add(frame_bank, text="Transfer Bank")
+        self.notebook.add(frame_bank, text="🏦 Transfer Bank")
         self.tree_bank = self._buat_tabel(
             frame_bank,
-            ["Trx ID", "Tipe Transfer", "No. Rekening", "Nama Penerima", "Jumlah", "Remark"])
+            ["Trx ID", "Tipe Transfer", "No. Rekening", "Nama Penerima", "Jumlah", "Remark"],
+            lebar=[120, 130, 150, 220, 130, 250])
 
         frame_banding_bank = ttk.Frame(self.notebook)
-        self.notebook.add(frame_banding_bank, text="Banding Transfer Bank")
+        self.notebook.add(frame_banding_bank, text="⇄ Banding Bank")
         self.tree_banding_bank = self._buat_tabel(
             frame_banding_bank,
-            ["Nama", "Jumlah Transfer Bank", "Upah Bersih Struk Gaji", "Status", "Detail"])
+            ["Nama", "Jumlah Transfer Bank", "Upah Bersih Struk Gaji", "Status", "Detail"],
+            lebar=[190, 150, 160, 300, 350])
 
         frame3 = ttk.Frame(self.notebook)
-        self.notebook.add(frame3, text="Log Pemrosesan")
-        self.txt_log = scrolledtext.ScrolledText(frame3, height=12, wrap="word", state="disabled")
-        self.txt_log.pack(fill="both", expand=True)
+        self.notebook.add(frame3, text="📝 Log Pemrosesan")
+        self.txt_log = scrolledtext.ScrolledText(frame3, height=12, wrap="word", state="disabled",
+                                                 font=("Consolas", 9), bg="white", relief="flat",
+                                                 borderwidth=1)
+        self.txt_log.pack(fill="both", expand=True, padx=2, pady=2)
 
+        # ===== Status bar =====
         self.status_bar = ttk.Label(self, text="Siap. " + self._teks_status_mode(),
-                                    relief="sunken", anchor="w")
+                                    style="Status.TLabel", anchor="w",
+                                    wraplength=1100, justify="left")
         self.status_bar.pack(fill="x", side="bottom")
 
-    def _buat_tabel(self, parent, kolom):
-        tree = ttk.Treeview(parent, columns=kolom, show="headings")
-        for k in kolom:
-            tree.heading(k, text=k)
-            tree.column(k, width=130, anchor="w")
-        vsb = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=vsb.set)
-        tree.pack(side="left", fill="both", expand=True)
-        vsb.pack(side="right", fill="y")
-        tree.tag_configure("bad", background="#fce4e4")
-        tree.tag_configure("ok", background="#e2f0d9")
+        # Wraplength label² di atas mengikuti lebar jendela supaya teks panjang
+        # (mis. deskripsi aturan mode / ringkasan banding) tidak terpotong di
+        # tepi layar saat window di-resize — ini bagian "responsive" utamanya.
+        self.bind("<Configure>", self._on_resize)
+
+    def _on_resize(self, event):
+        if event.widget is not self:
+            return
+        lebar = max(400, event.width - 40)
+        for lbl in (self.lbl_mode, self.lbl_progres_teks, self.status_bar):
+            if lbl.cget("wraplength") != lebar:
+                lbl.configure(wraplength=lebar)
+
+    def _buat_tabel(self, parent, kolom, lebar=None, stretch_kolom=None):
+        wrap = ttk.Frame(parent)
+        wrap.pack(fill="both", expand=True)
+
+        tree = ttk.Treeview(wrap, columns=kolom, show="headings")
+        idx_stretch = kolom.index(stretch_kolom) if stretch_kolom in (kolom or []) else len(kolom) - 1
+        for idx, k in enumerate(kolom):
+            tree.heading(k, text=k, anchor="w")
+            w = lebar[idx] if lebar and idx < len(lebar) else 130
+            # Kolom teks panjang (mis. "Detail"/"Catatan") melar mengisi sisa
+            # ruang saat window dilebarkan; kolom lain tetap pada lebar tetap.
+            tree.column(k, width=w, minwidth=50, anchor="w", stretch=(idx == idx_stretch))
+
+        vsb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
+        hsb = ttk.Scrollbar(wrap, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        wrap.rowconfigure(0, weight=1)
+        wrap.columnconfigure(0, weight=1)
+
+        tree.tag_configure("bad", background=self.COLORS["bad_bg"], foreground=self.COLORS["bad_fg"])
+        tree.tag_configure("ok", background=self.COLORS["ok_bg"], foreground=self.COLORS["ok_fg"])
+        tree.tag_configure("warn", background="#fff6e0", foreground="#7a5b0b")
         return tree
 
     # ---------- Threading / progress ----------
@@ -341,11 +524,14 @@ class App(tk.Tk):
     def _isi_tabel_banding_bank(self):
         self.tree_banding_bank.delete(*self.tree_banding_bank.get_children())
         for h in self.hasil_banding_bank:
-            tag = "ok" if h.status == "COCOK" else (
-                None if h.status == "TIDAK DITRANSFER (UPAH 0 - WAJAR)" else "bad")
-            kwargs = {"tags": (tag,)} if tag else {}
+            if h.status == "COCOK":
+                tag = "ok"
+            elif h.status in ("TIDAK DITRANSFER (UPAH 0 - WAJAR)", "AMBIGU (NAMA KEMBAR)"):
+                tag = "warn"
+            else:
+                tag = "bad"
             self.tree_banding_bank.insert("", "end", values=(
-                h.nama, h.jumlah_bank, h.jumlah_gaji, h.status, "; ".join(h.detail)), **kwargs)
+                h.nama, h.jumlah_bank, h.jumlah_gaji, h.status, "; ".join(h.detail)), tags=(tag,))
 
     def _on_mode_berubah(self):
         if self._busy:
