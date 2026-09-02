@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 import rules
 
 @dataclass
@@ -165,8 +166,14 @@ def bandingkan_pengupahan(data_pengupahan, data_gaji, toleransi=1.0, progress=No
             for kolom_pu, kolom_gj in _PEMETAAN_KOLOM_PENGUPAHAN.items():
                 nilai_pu = pu.get(kolom_pu)
                 nilai_gj = gj.get(kolom_gj)
+                # Bandingkan BESARAN (abs), bukan nilai mentah: struk gaji
+                # (gaji_parser.py) menyimpan potongan seperti BPJS sebagai
+                # angka negatif (konvensi "(50.529)" di PDF -> -50529), sedang
+                # Laporan Pengupahan mencetaknya sebagai angka positif murni.
+                # Beda tanda ini bukan anomali data — cuma beda konvensi
+                # penulisan antar dokumen.
                 if nilai_pu is not None and nilai_gj is not None \
-                        and abs(round(nilai_pu, 2) - round(nilai_gj, 2)) > toleransi:
+                        and abs(abs(round(nilai_pu, 2)) - abs(round(nilai_gj, 2))) > toleransi:
                     detail.append(
                         f"{kolom_pu} tidak cocok: Laporan Pengupahan = {nilai_pu}, "
                         f"Struk Gaji = {nilai_gj}")
@@ -187,4 +194,112 @@ def ringkasan_pengupahan(hasil_banding):
         "tidak_sinkron": sum(1 for h in hasil_banding if h.status == "TIDAK SINKRON"),
         "hanya_di_pengupahan": sum(1 for h in hasil_banding if h.status == "HANYA DI LAPORAN PENGUPAHAN"),
         "hanya_di_struk_gaji": sum(1 for h in hasil_banding if h.status == "HANYA DI STRUK GAJI"),
+    }
+
+
+# ---------- Banding Transfer Bank vs Struk Gaji ----------
+# File transfer bank (bank_transfer_parser.py) TIDAK punya NRP terisi (kolom
+# NIP selalu kosong di template bank), jadi pencocokan di sini WAJIB lewat
+# NAMA (dinormalisasi), bukan NRP seperti fungsi banding lainnya.
+def _normalisasi_nama(nama):
+    if not nama:
+        return ""
+    return re.sub(r"\s+", " ", str(nama).strip().upper())
+
+
+@dataclass
+class HasilBandingTransferBank:
+    nama: str
+    jumlah_bank: float
+    jumlah_gaji: float
+    status: str
+    detail: list
+
+
+def bandingkan_transfer_bank(data_bank, data_gaji, toleransi=1.0, progress=None):
+    """
+    Cocokkan transaksi transfer bank (bank_transfer_parser.parse_transfer_bank())
+    terhadap struk gaji (gaji_parser.py) lewat NAMA (bukan NRP — lihat catatan
+    modul bank_transfer_parser.py). Amount transfer dibandingkan ke u_bersih
+    (UPAH BERSIH) struk gaji.
+
+    Penanganan kasus khusus:
+    - Karyawan dengan UPAH BERSIH 0/None di struk gaji WAJAR tidak muncul di
+      transfer bank (tidak ada yang ditransfer) -> status "TIDAK DITRANSFER
+      (UPAH 0 - WAJAR)", bukan anomali.
+    - Nama yang muncul lebih dari sekali di salah satu sisi (nama kembar/
+      ambigu) TIDAK ditebak pasangannya secara otomatis -> status "AMBIGU
+      (NAMA KEMBAR)" supaya diperiksa manual, karena mencocokkan gaji orang
+      yang salah adalah risiko nyata.
+    Return: list HasilBandingTransferBank.
+    """
+    by_bank = {}
+    for b in data_bank:
+        by_bank.setdefault(_normalisasi_nama(b.get("nama")), []).append(b)
+
+    by_gaji = {}
+    for g in data_gaji:
+        by_gaji.setdefault(_normalisasi_nama(g.get("nama")), []).append(g)
+
+    semua_nama = sorted(set(by_bank) | set(by_gaji))
+    hasil = []
+    n = len(semua_nama) or 1
+
+    for i, nama_key in enumerate(semua_nama):
+        entri_bank = by_bank.get(nama_key, [])
+        entri_gaji = by_gaji.get(nama_key, [])
+
+        if len(entri_bank) > 1 or len(entri_gaji) > 1:
+            hasil.append(HasilBandingTransferBank(
+                nama_key,
+                sum((b.get("jumlah") or 0) for b in entri_bank) if entri_bank else None,
+                sum((g.get("u_bersih") or 0) for g in entri_gaji) if entri_gaji else None,
+                "AMBIGU (NAMA KEMBAR)",
+                [f"{len(entri_bank)} transaksi bank vs {len(entri_gaji)} baris struk gaji "
+                 f"dengan nama sama — tidak dicocokkan otomatis, periksa manual"]))
+            continue
+
+        if entri_bank and not entri_gaji:
+            hasil.append(HasilBandingTransferBank(
+                nama_key, entri_bank[0].get("jumlah"), None,
+                "HANYA DI TRANSFER BANK",
+                ["Tidak ada nama ini di struk gaji — periksa kemungkinan transfer ke penerima keliru"]))
+            continue
+
+        if entri_gaji and not entri_bank:
+            u_bersih = entri_gaji[0].get("u_bersih")
+            if u_bersih is None or abs(u_bersih) < toleransi:
+                hasil.append(HasilBandingTransferBank(
+                    nama_key, None, u_bersih, "TIDAK DITRANSFER (UPAH 0 - WAJAR)",
+                    ["Upah bersih 0/kosong di struk gaji — wajar tidak ada transfer bank"]))
+            else:
+                hasil.append(HasilBandingTransferBank(
+                    nama_key, None, u_bersih, "HANYA DI STRUK GAJI (BELUM ADA TRANSFER BANK)",
+                    [f"Upah bersih struk gaji = {u_bersih}, tapi tidak ditemukan transaksi transfer bank"]))
+            continue
+
+        jumlah_bank = entri_bank[0].get("jumlah")
+        jumlah_gaji = entri_gaji[0].get("u_bersih")
+        detail = []
+        if jumlah_bank is not None and jumlah_gaji is not None \
+                and abs(round(jumlah_bank, 2) - round(jumlah_gaji, 2)) > toleransi:
+            detail.append(f"Jumlah tidak cocok: Transfer Bank = {jumlah_bank}, Struk Gaji (Upah Bersih) = {jumlah_gaji}")
+        status = "COCOK" if not detail else "TIDAK SINKRON"
+        hasil.append(HasilBandingTransferBank(nama_key, jumlah_bank, jumlah_gaji, status, detail))
+
+        if progress and (i % 5 == 0 or i + 1 == n):
+            progress(int(100 * (i + 1) / n), f"Membandingkan transfer bank {i + 1}/{n}")
+
+    return hasil
+
+
+def ringkasan_transfer_bank(hasil_banding):
+    return {
+        "total": len(hasil_banding),
+        "cocok": sum(1 for h in hasil_banding if h.status == "COCOK"),
+        "tidak_sinkron": sum(1 for h in hasil_banding if h.status == "TIDAK SINKRON"),
+        "tidak_ditransfer_wajar": sum(1 for h in hasil_banding if h.status == "TIDAK DITRANSFER (UPAH 0 - WAJAR)"),
+        "hanya_di_bank": sum(1 for h in hasil_banding if h.status == "HANYA DI TRANSFER BANK"),
+        "hanya_di_struk_gaji": sum(1 for h in hasil_banding if h.status == "HANYA DI STRUK GAJI (BELUM ADA TRANSFER BANK)"),
+        "ambigu": sum(1 for h in hasil_banding if h.status == "AMBIGU (NAMA KEMBAR)"),
     }

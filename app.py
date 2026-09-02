@@ -17,6 +17,7 @@ import rules
 import absensi_parser
 import gaji_parser
 import pengupahan_parser
+import bank_transfer_parser
 import compare
 import exporter
 
@@ -34,6 +35,8 @@ class App(tk.Tk):
         self.data_pengupahan = []
         self.pengupahan_parse_lengkap = None
         self.hasil_banding_pengupahan = []
+        self.data_bank = []
+        self.hasil_banding_bank = []
 
         self.mode_var = tk.StringVar(value=rules.MODE_NORMAL)
         self._busy = False
@@ -89,8 +92,23 @@ class App(tk.Tk):
             top2, text="5. Bandingkan Pengupahan vs Struk Gaji", command=self.jalankan_banding_pengupahan)
         self.btn_banding_pengupahan.pack(side="left", padx=4)
 
+        top3 = ttk.Frame(self, padding=(8, 0, 8, 8))
+        top3.pack(fill="x")
+
+        self.btn_bank = ttk.Button(top3, text="6. Buka Excel Transfer Bank", command=self.buka_bank)
+        self.btn_bank.pack(side="left", padx=4)
+        self.lbl_bank = ttk.Label(top3, text="belum ada file")
+        self.lbl_bank.pack(side="left", padx=4)
+
+        ttk.Separator(top3, orient="vertical").pack(side="left", fill="y", padx=10)
+
+        self.btn_banding_bank = ttk.Button(
+            top3, text="7. Bandingkan Transfer Bank vs Struk Gaji", command=self.jalankan_banding_bank)
+        self.btn_banding_bank.pack(side="left", padx=4)
+
         self._tombol = [self.btn_absensi, self.btn_gaji, self.btn_banding, self.btn_ekspor,
-                        self.btn_pengupahan, self.btn_banding_pengupahan]
+                        self.btn_pengupahan, self.btn_banding_pengupahan,
+                        self.btn_bank, self.btn_banding_bank]
 
         mode_bar = ttk.LabelFrame(self, text="Mode Pemrosesan (pilih sebelum audit / banding)", padding=6)
         mode_bar.pack(fill="x", padx=8, pady=(0, 4))
@@ -154,6 +172,18 @@ class App(tk.Tk):
         self.tree_banding_pengupahan = self._buat_tabel(
             frame_banding_pengupahan,
             ["NRP", "Nama (Pengupahan)", "Nama (Struk Gaji)", "Status", "Detail Perbedaan"])
+
+        frame_bank = ttk.Frame(self.notebook)
+        self.notebook.add(frame_bank, text="Transfer Bank")
+        self.tree_bank = self._buat_tabel(
+            frame_bank,
+            ["Trx ID", "Tipe Transfer", "No. Rekening", "Nama Penerima", "Jumlah", "Remark"])
+
+        frame_banding_bank = ttk.Frame(self.notebook)
+        self.notebook.add(frame_banding_bank, text="Banding Transfer Bank")
+        self.tree_banding_bank = self._buat_tabel(
+            frame_banding_bank,
+            ["Nama", "Jumlah Transfer Bank", "Upah Bersih Struk Gaji", "Status", "Detail"])
 
         frame3 = ttk.Frame(self.notebook)
         self.notebook.add(frame3, text="Log Pemrosesan")
@@ -300,6 +330,23 @@ class App(tk.Tk):
             self.tree_banding_pengupahan.insert("", "end", values=(
                 h.nrp, h.nama_pengupahan, h.nama_gaji, h.status, "; ".join(h.detail)), tags=(tag,))
 
+    def _isi_tabel_bank(self):
+        self.tree_bank.delete(*self.tree_bank.get_children())
+        for b in self.data_bank:
+            self.tree_bank.insert("", "end", values=(
+                b.get("trx_id"), b.get("transfer_type"), b.get("credited_account"),
+                b.get("nama"), b.get("jumlah"), b.get("remark"),
+            ))
+
+    def _isi_tabel_banding_bank(self):
+        self.tree_banding_bank.delete(*self.tree_banding_bank.get_children())
+        for h in self.hasil_banding_bank:
+            tag = "ok" if h.status == "COCOK" else (
+                None if h.status == "TIDAK DITRANSFER (UPAH 0 - WAJAR)" else "bad")
+            kwargs = {"tags": (tag,)} if tag else {}
+            self.tree_banding_bank.insert("", "end", values=(
+                h.nama, h.jumlah_bank, h.jumlah_gaji, h.status, "; ".join(h.detail)), **kwargs)
+
     def _on_mode_berubah(self):
         if self._busy:
             return
@@ -434,6 +481,33 @@ class App(tk.Tk):
 
         self._jalankan_latar(kerja, selesai, gagal, judul="Membaca PDF laporan pengupahan...")
 
+    def buka_bank(self):
+        path = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xlsm")])
+        if not path:
+            return
+
+        def kerja(progress):
+            return path, bank_transfer_parser.parse_transfer_bank(path, progress=progress)
+
+        def selesai(payload):
+            path_, data = payload
+            self.data_bank = data
+            self.lbl_bank.config(text=os.path.basename(path_) + f" ({len(data)} transaksi)")
+            self._isi_tabel_bank()
+            total = sum((b.get("jumlah") or 0) for b in data)
+            self.status_bar.config(
+                text=f"Transfer bank dimuat: {len(data)} transaksi, total = {total:,.0f}".replace(",", "."))
+            self._catat_log(
+                f"Excel transfer bank dimuat: {os.path.basename(path_)} "
+                f"({len(data)} transaksi, total = {total:,.0f})".replace(",", "."))
+            self.notebook.select(5)
+
+        def gagal(err):
+            messagebox.showerror("Gagal membaca Excel Transfer Bank", str(err))
+            self._catat_log(f"Gagal parse transfer bank: {err}")
+
+        self._jalankan_latar(kerja, selesai, gagal, judul="Membaca Excel transfer bank...")
+
     def _audit_absensi_latar(self, judul):
         mode = self._mode_aktif()
         data = list(self.data_absensi)
@@ -542,9 +616,39 @@ class App(tk.Tk):
 
         self._jalankan_latar(kerja, selesai, judul="Membandingkan laporan pengupahan vs struk gaji...")
 
+    def jalankan_banding_bank(self):
+        if not self.data_bank:
+            messagebox.showwarning("Data belum lengkap", "Buka dulu Excel Transfer Bank (langkah 6).")
+            return
+        if not self.data_gaji:
+            messagebox.showwarning("Data belum lengkap", "Buka dulu PDF Struk Gaji (langkah 2).")
+            return
+        bank = list(self.data_bank)
+        gaji = list(self.data_gaji)
+
+        def kerja(progress):
+            return compare.bandingkan_transfer_bank(bank, gaji, progress=progress)
+
+        def selesai(hasil):
+            self.hasil_banding_bank = hasil
+            self._isi_tabel_banding_bank()
+            ring = compare.ringkasan_transfer_bank(hasil)
+            self.status_bar.config(
+                text=f"Banding transfer bank selesai: {ring['cocok']} cocok, {ring['tidak_sinkron']} tidak sinkron, "
+                     f"{ring['tidak_ditransfer_wajar']} upah 0 (wajar), {ring['hanya_di_bank']} hanya di bank, "
+                     f"{ring['hanya_di_struk_gaji']} belum ditransfer, {ring['ambigu']} ambigu (nama kembar).")
+            self._catat_log(
+                f"Banding transfer bank selesai. Cocok={ring['cocok']}, tidak sinkron={ring['tidak_sinkron']}, "
+                f"hanya di bank={ring['hanya_di_bank']}, hanya di struk gaji={ring['hanya_di_struk_gaji']}, "
+                f"ambigu={ring['ambigu']}.")
+            self.notebook.select(6)
+
+        self._jalankan_latar(kerja, selesai, judul="Membandingkan transfer bank vs struk gaji...")
+
     def ekspor(self):
         if not self.anomali_absensi and not self.hasil_banding and not self.data_gaji \
-                and not self.hasil_banding_pengupahan and not self.data_pengupahan:
+                and not self.hasil_banding_pengupahan and not self.data_pengupahan \
+                and not self.hasil_banding_bank and not self.data_bank:
             messagebox.showwarning("Belum ada hasil", "Jalankan pemeriksaan/banding dulu sebelum ekspor.")
             return
         path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
@@ -560,12 +664,16 @@ class App(tk.Tk):
         }
         banding_pengupahan = list(self.hasil_banding_pengupahan)
         ring_pengupahan = compare.ringkasan_pengupahan(banding_pengupahan) if banding_pengupahan else None
+        banding_bank = list(self.hasil_banding_bank)
+        ring_bank = compare.ringkasan_transfer_bank(banding_bank) if banding_bank else None
 
         def kerja(progress):
             return exporter.ekspor_hasil(
                 path, anomali, banding, ring, data_gaji=gaji, mode=mode, progress=progress,
                 hasil_banding_pengupahan=banding_pengupahan,
-                ringkasan_banding_pengupahan=ring_pengupahan)
+                ringkasan_banding_pengupahan=ring_pengupahan,
+                hasil_banding_bank=banding_bank,
+                ringkasan_banding_bank=ring_bank)
 
         def selesai(out):
             self._catat_log(f"Hasil diekspor ke {out} (mode={mode}).")
