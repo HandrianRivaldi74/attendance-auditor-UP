@@ -9,6 +9,7 @@ thread agar jendela tidak freeze. Progress 0–100% di-update lewat queue.
 import os
 import queue
 import threading
+import webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from datetime import datetime
@@ -26,7 +27,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Pemeriksa Absensi & Struk Gaji - PT. URASE PRIMA")
-        self.geometry("1360x880")
+        self._pusatkan_window(1360, 880)
         self.minsize(1180, 720)
 
         self.data_absensi = []
@@ -51,6 +52,14 @@ class App(tk.Tk):
 
     def _mode_aktif(self):
         return rules.normalisasi_mode(self.mode_var.get())
+
+    def _pusatkan_window(self, lebar, tinggi):
+        self.update_idletasks()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = max(0, (sw - lebar) // 2)
+        y = max(0, (sh - tinggi) // 2)
+        self.geometry(f"{lebar}x{tinggi}+{x}+{y}")
 
     def _teks_status_mode(self):
         label, aturan = rules.deskripsi_mode(self._mode_aktif())
@@ -173,9 +182,13 @@ class App(tk.Tk):
         tk.Label(judul_box, text="PT. URASE PRIMA — Audit Absensi, Gaji, Pengupahan & Transfer Bank",
                  bg=C["header_bg"], fg="#c7d5ee", font=("Segoe UI", 9)).pack(anchor="w")
 
+        self.btn_tentang = ttk.Button(header_in, text="ℹ Tentang", style="Step.TButton",
+                                      command=self._buka_tentang)
+        self.btn_tentang.grid(row=0, column=1, sticky="e", padx=(12, 0))
+
         self.btn_ekspor = ttk.Button(header_in, text="⬇ Ekspor ke Excel", style="Export.TButton",
                                      command=self.ekspor)
-        self.btn_ekspor.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        self.btn_ekspor.grid(row=0, column=2, sticky="e", padx=(12, 0))
 
         # ===== Baris kartu tahapan (responsif: 3 kolom, lebar proporsional) =====
         cards_wrap = ttk.Frame(self, padding=(12, 10, 12, 4))
@@ -201,7 +214,7 @@ class App(tk.Tk):
         self.lbl_gaji = ttk.Label(card1, text="belum ada file", style="Muted.TLabel", wraplength=280)
         self.lbl_gaji.grid(row=3, column=0, sticky="w", pady=(0, 8))
 
-        self.btn_banding = ttk.Button(card1, text="3. Bandingkan Absensi vs Struk Gaji", style="Accent.TButton",
+        self.btn_banding = ttk.Button(card1, text="3. Bandingkan vs Struk Gaji", style="Accent.TButton",
                                       command=self.jalankan_banding)
         self.btn_banding.grid(row=4, column=0, sticky="ew")
 
@@ -216,14 +229,15 @@ class App(tk.Tk):
         self.lbl_pengupahan = ttk.Label(card2, text="belum ada file", style="Muted.TLabel", wraplength=280)
         self.lbl_pengupahan.grid(row=1, column=0, sticky="w", pady=(0, 8))
 
-        # spacer supaya tombol "Bandingkan" sejajar vertikal dengan kartu lain
-        ttk.Frame(card2).grid(row=2, column=0, sticky="ew", pady=(0, 3))
-        ttk.Label(card2, text="").grid(row=3, column=0, pady=(0, 8))
+        # Spacer setinggi persis blok "tombol file ke-2 + label" di kartu 1
+        # (63px, diukur langsung dari render), supaya tombol hijau di ketiga
+        # kartu benar-benar sejajar horizontal, bukan cuma didekati.
+        ttk.Frame(card2, height=63).grid(row=2, column=0, sticky="ew")
 
         self.btn_banding_pengupahan = ttk.Button(
             card2, text="5. Bandingkan vs Struk Gaji", style="Accent.TButton",
             command=self.jalankan_banding_pengupahan)
-        self.btn_banding_pengupahan.grid(row=4, column=0, sticky="ew")
+        self.btn_banding_pengupahan.grid(row=3, column=0, sticky="ew")
 
         # -- Kartu 3: Transfer Bank --
         card3 = ttk.LabelFrame(cards_wrap, text=" 🏦  Transfer Bank ", padding=10)
@@ -236,13 +250,12 @@ class App(tk.Tk):
         self.lbl_bank = ttk.Label(card3, text="belum ada file", style="Muted.TLabel", wraplength=280)
         self.lbl_bank.grid(row=1, column=0, sticky="w", pady=(0, 8))
 
-        ttk.Label(card3, text="").grid(row=2, column=0, sticky="ew", pady=(0, 3))
-        ttk.Label(card3, text="").grid(row=3, column=0, pady=(0, 8))
+        ttk.Frame(card3, height=63).grid(row=2, column=0, sticky="ew")
 
         self.btn_banding_bank = ttk.Button(
             card3, text="7. Bandingkan vs Struk Gaji", style="Accent.TButton",
             command=self.jalankan_banding_bank)
-        self.btn_banding_bank.grid(row=4, column=0, sticky="ew")
+        self.btn_banding_bank.grid(row=3, column=0, sticky="ew")
 
         self._tombol = [self.btn_absensi, self.btn_gaji, self.btn_banding, self.btn_ekspor,
                         self.btn_pengupahan, self.btn_banding_pengupahan,
@@ -532,6 +545,44 @@ class App(tk.Tk):
                 tag = "bad"
             self.tree_banding_bank.insert("", "end", values=(
                 h.nama, h.jumlah_bank, h.jumlah_gaji, h.status, "; ".join(h.detail)), tags=(tag,))
+
+    def _buka_tentang(self):
+        C = self.COLORS
+        top = tk.Toplevel(self)
+        top.title("Tentang Aplikasi")
+        top.configure(bg=C["card_bg"])
+        top.resizable(False, False)
+        top.transient(self)
+        top.grab_set()
+
+        pad = tk.Frame(top, bg=C["card_bg"], padx=30, pady=26)
+        pad.pack()
+
+        tk.Label(pad, text="📊 Pemeriksa Absensi & Struk Gaji", bg=C["card_bg"],
+                 fg=C["primary_dark"], font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(pad, text="PT. URASE PRIMA", bg=C["card_bg"], fg=C["muted"],
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 16))
+
+        ttk.Separator(pad).pack(fill="x", pady=(0, 16))
+
+        tk.Label(pad, text="DIRANCANG OLEH", bg=C["card_bg"], fg=C["muted"],
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        tk.Label(pad, text="Handrian Rivaldi", bg=C["card_bg"], fg=C["text"],
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(2, 2))
+        tk.Label(pad, text="Dibuat tahun 2026", bg=C["card_bg"], fg=C["muted"],
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 12))
+
+        link = tk.Label(pad, text="🔗 github.com/HandrianRivaldi74", bg=C["card_bg"],
+                        fg=C["primary"], font=("Segoe UI", 10, "underline"), cursor="hand2")
+        link.pack(anchor="w")
+        link.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/HandrianRivaldi74"))
+
+        ttk.Button(pad, text="Tutup", style="Step.TButton", command=top.destroy).pack(anchor="e", pady=(24, 0))
+
+        top.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - top.winfo_width()) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - top.winfo_height()) // 2
+        top.geometry(f"+{max(0, x)}+{max(0, y)}")
 
     def _on_mode_berubah(self):
         if self._busy:
@@ -852,12 +903,16 @@ class App(tk.Tk):
         ring_pengupahan = compare.ringkasan_pengupahan(banding_pengupahan) if banding_pengupahan else None
         banding_bank = list(self.hasil_banding_bank)
         ring_bank = compare.ringkasan_transfer_bank(banding_bank) if banding_bank else None
+        pengupahan = list(self.data_pengupahan)
+        bank = list(self.data_bank)
 
         def kerja(progress):
             return exporter.ekspor_hasil(
                 path, anomali, banding, ring, data_gaji=gaji, mode=mode, progress=progress,
+                data_pengupahan=pengupahan,
                 hasil_banding_pengupahan=banding_pengupahan,
                 ringkasan_banding_pengupahan=ring_pengupahan,
+                data_bank=bank,
                 hasil_banding_bank=banding_bank,
                 ringkasan_banding_bank=ring_bank)
 

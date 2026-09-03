@@ -1,19 +1,46 @@
 """
 exporter.py
-Ekspor hasil pemeriksaan absensi (anomali), hasil banding, dan rincian struk gaji
-(sesuai Mode Sipil / Mode Normal) ke satu file Excel.
+Ekspor semua hasil pemeriksaan (anomali absensi, banding absensi vs struk gaji,
+struk gaji, laporan pengupahan + bandingnya, transfer bank + bandingnya) ke
+satu file Excel.
+
+Urutan sheet mengikuti urutan tab di GUI (app.py) supaya konsisten:
+  1. Ringkasan       (cover/summary — dibuka pertama)
+  2. Anomali Absensi
+  3. Banding Absensi vs Gaji
+  4. Struk Gaji
+  5. Laporan Pengupahan   (data mentah hasil pengupahan_parser.py)
+  6. Banding Pengupahan
+  7. Transfer Bank        (data mentah hasil bank_transfer_parser.py)
+  8. Banding Transfer Bank
+Sheet 5 & 7 (data mentah) baru ditambahkan di versi ini — sebelumnya hanya
+hasil banding-nya yang diekspor, data mentah pengupahan/transfer bank belum
+pernah ikut ke Excel sama sekali.
 """
 
+from datetime import datetime
+
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 import rules
 
-HEADER_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-HEADER_FONT = Font(bold=True)
-BAD_FILL = PatternFill(start_color="FCE4E4", end_color="FCE4E4", fill_type="solid")
-OK_FILL = PatternFill(start_color="E2F0D9", end_color="E2F0D9", fill_type="solid")
+# Palet warna disamakan dengan tema GUI (app.py COLORS) supaya laporan Excel
+# dan aplikasi terasa satu kesatuan.
+HEADER_FILL = PatternFill(start_color="173B7A", end_color="173B7A", fill_type="solid")
+HEADER_FONT = Font(bold=True, color="FFFFFF")
+TITLE_FONT = Font(bold=True, size=14, color="173B7A")
+SUBTITLE_FONT = Font(size=10, color="64748B", italic=True)
+
+BAD_FILL = PatternFill(start_color="FDECEA", end_color="FDECEA", fill_type="solid")
+BAD_FONT = Font(color="7A1F1F")
+OK_FILL = PatternFill(start_color="E6F7EF", end_color="E6F7EF", fill_type="solid")
+OK_FONT = Font(color="0F5132")
+WARN_FILL = PatternFill(start_color="FFF6E0", end_color="FFF6E0", fill_type="solid")
+WARN_FONT = Font(color="7A5B0B")
 MODE_FILL = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+
+STATUS_WARN = {"TIDAK DITRANSFER (UPAH 0 - WAJAR)", "AMBIGU (NAMA KEMBAR)"}
 
 
 def _lapor(progress, persen, pesan=""):
@@ -21,12 +48,13 @@ def _lapor(progress, persen, pesan=""):
         progress(int(max(0, min(100, persen))), pesan)
 
 
-def _tulis_header(ws, kolom):
+def _tulis_header(ws, kolom, baris=1):
     for i, judul in enumerate(kolom, start=1):
-        c = ws.cell(row=1, column=i, value=judul)
+        c = ws.cell(row=baris, column=i, value=judul)
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
-    ws.freeze_panes = "A2"
+        c.alignment = Alignment(vertical="center")
+    ws.freeze_panes = ws.cell(row=baris + 1, column=1).coordinate
 
 
 def _lebarkan_kolom(ws, lebar):
@@ -35,13 +63,34 @@ def _lebarkan_kolom(ws, lebar):
         ws.column_dimensions[get_column_letter(i)].width = w
 
 
+def _fill_status(status):
+    """Kembalikan (fill, font) berdasarkan status: COCOK -> hijau,
+    status 'wajar/perlu cek manual' -> kuning, selain itu -> merah."""
+    if status == "COCOK":
+        return OK_FILL, OK_FONT
+    if status in STATUS_WARN:
+        return WARN_FILL, WARN_FONT
+    return BAD_FILL, BAD_FONT
+
+
+def _tulis_baris(ws, r, nilai, fill=None, font=None):
+    for c, v in enumerate(nilai, start=1):
+        cell = ws.cell(r, c, v)
+        if fill:
+            cell.fill = fill
+        if font:
+            cell.font = font
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+
 def _tulis_sheet_struk(wb, data_gaji, mode):
     ws = wb.create_sheet("Struk Gaji")
     mode = rules.normalisasi_mode(mode)
     label, aturan = rules.deskripsi_mode(mode)
     ws["A1"] = f"STRUK GAJI — {label}"
-    ws["A1"].font = Font(bold=True, size=13)
+    ws["A1"].font = TITLE_FONT
     ws["A2"] = f"Aturan HKP: {aturan}"
+    ws["A2"].font = SUBTITLE_FONT
     ws.merge_cells("A2:F2")
 
     kolom = [
@@ -54,11 +103,7 @@ def _tulis_sheet_struk(wb, data_gaji, mode):
         "Upah Kotor", "BPJS KT", "BPJS KS", "Pot.Lain", "U.Bersih",
         "Catatan HKP",
     ]
-    for i, judul in enumerate(kolom, start=1):
-        c = ws.cell(row=4, column=i, value=judul)
-        c.font = HEADER_FONT
-        c.fill = HEADER_FILL
-    ws.freeze_panes = "A5"
+    _tulis_header(ws, kolom, baris=4)
 
     if data_gaji:
         for r, g in enumerate(data_gaji, start=5):
@@ -76,11 +121,9 @@ def _tulis_sheet_struk(wb, data_gaji, mode):
                 g.get("pot_lain"), g.get("u_bersih"),
                 g.get("catatan_hkp"),
             ]
-            for c, v in enumerate(nilai, start=1):
-                cell = ws.cell(r, c, v)
-                if c <= 10:
-                    cell.fill = MODE_FILL
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
+            _tulis_baris(ws, r, nilai)
+            for c in range(5, 11):  # kolom Mode..Batas group ditandai amber (kluster info HKP)
+                ws.cell(r, c).fill = MODE_FILL
 
     _lebarkan_kolom(ws, [12, 26, 18, 16, 28, 36, 16, 16, 18, 12,
                          10, 10, 10, 14, 14, 12, 16, 12, 16,
@@ -88,96 +131,69 @@ def _tulis_sheet_struk(wb, data_gaji, mode):
     return ws
 
 
-def ekspor_hasil(path_output, anomali_absensi=None, hasil_banding=None, ringkasan_banding=None,
-                 data_gaji=None, mode=None, progress=None,
-                 hasil_banding_pengupahan=None, ringkasan_banding_pengupahan=None,
-                 hasil_banding_bank=None, ringkasan_banding_bank=None):
-    _lapor(progress, 2, "Menyiapkan workbook Excel...")
-    wb = Workbook()
-    mode = rules.normalisasi_mode(
-        mode if mode is not None else (ringkasan_banding or {}).get("mode")
-    )
+def _tulis_sheet_pengupahan(wb, data_pengupahan):
+    """Sheet data mentah hasil pengupahan_parser.parse_pengupahan()['karyawan']."""
+    ws = wb.create_sheet("Laporan Pengupahan")
+    ws["A1"] = "LAPORAN PENGUPAHAN — Data Mentah Hasil Parse"
+    ws["A1"].font = TITLE_FONT
+    ws["A2"] = "Satu baris = satu karyawan pada dokumen Laporan Pengupahan Karyawan"
+    ws["A2"].font = SUBTITLE_FONT
+    ws.merge_cells("A2:F2")
 
-    ws1 = wb.active
-    ws1.title = "Anomali Absensi"
-    _tulis_header(ws1, ["NRP", "Nama", "Aturan", "Detail", "Tanggal"])
-    _lebarkan_kolom(ws1, [12, 28, 12, 60, 10])
-    if anomali_absensi:
-        n = len(anomali_absensi)
-        for r, a in enumerate(anomali_absensi, start=2):
-            ws1.cell(r, 1, a.nrp)
-            ws1.cell(r, 2, a.nama)
-            ws1.cell(r, 3, a.aturan)
-            ws1.cell(r, 4, a.detail)
-            ws1.cell(r, 5, a.tanggal)
-            for c in range(1, 6):
-                ws1.cell(r, c).fill = BAD_FILL
-            if r % 20 == 0:
-                _lapor(progress, 5 + int(15 * (r - 1) / n), f"Ekspor anomali {r - 1}/{n}")
-    _lapor(progress, 20, "Sheet anomali selesai")
+    kolom = ["NRP", "Nama", "Bagian", "Bagian/Departemen", "Upah Kotor",
+             "BPJS Kesehatan", "BPJS Tenaga Kerja", "Pot. Lain-lain", "Upah Bersih"]
+    _tulis_header(ws, kolom, baris=4)
 
-    ws2 = wb.create_sheet("Banding Absensi vs Gaji")
-    _tulis_header(ws2, ["NRP", "Nama (Absensi)", "Nama (Struk Gaji)", "Status",
-                        "Mode", "Sumber HKP", "Detail Perbedaan"])
-    _lebarkan_kolom(ws2, [12, 26, 26, 16, 14, 36, 70])
-    if hasil_banding:
-        n = len(hasil_banding)
-        for r, h in enumerate(hasil_banding, start=2):
-            ws2.cell(r, 1, h.nrp)
-            ws2.cell(r, 2, h.nama_absensi)
-            ws2.cell(r, 3, h.nama_gaji)
-            ws2.cell(r, 4, h.status)
-            ws2.cell(r, 5, getattr(h, "mode", "") or "")
-            ws2.cell(r, 6, getattr(h, "sumber_hkp", "") or "")
-            ws2.cell(r, 7, "; ".join(h.detail) if h.detail else "")
-            fill = OK_FILL if h.status == "COCOK" else BAD_FILL
-            for c in range(1, 8):
-                ws2.cell(r, c).fill = fill
-                ws2.cell(r, c).alignment = Alignment(wrap_text=True, vertical="top")
-            if r % 20 == 0:
-                _lapor(progress, 25 + int(20 * (r - 1) / n), f"Ekspor banding {r - 1}/{n}")
-    _lapor(progress, 50, "Sheet banding selesai")
+    for r, k in enumerate(data_pengupahan or [], start=5):
+        nilai = [
+            k.get("nrp"), k.get("nama"), k.get("bagian"), k.get("bagian_section"),
+            k.get("upah_kotor"), k.get("bpjs_kesehatan"), k.get("bpjs_tenaga_kerja"),
+            k.get("pot_lain"), k.get("upah_bersih"),
+        ]
+        _tulis_baris(ws, r, nilai)
 
-    if hasil_banding_pengupahan:
-        ws2b = wb.create_sheet("Banding Pengupahan")
-        _tulis_header(ws2b, ["NRP", "Nama (Laporan Pengupahan)", "Nama (Struk Gaji)",
-                              "Status", "Detail Perbedaan"])
-        _lebarkan_kolom(ws2b, [12, 30, 30, 16, 80])
-        n = len(hasil_banding_pengupahan)
-        for r, h in enumerate(hasil_banding_pengupahan, start=2):
-            ws2b.cell(r, 1, h.nrp)
-            ws2b.cell(r, 2, h.nama_pengupahan)
-            ws2b.cell(r, 3, h.nama_gaji)
-            ws2b.cell(r, 4, h.status)
-            ws2b.cell(r, 5, "; ".join(h.detail) if h.detail else "")
-            fill = OK_FILL if h.status == "COCOK" else BAD_FILL
-            for c in range(1, 6):
-                ws2b.cell(r, c).fill = fill
-                ws2b.cell(r, c).alignment = Alignment(wrap_text=True, vertical="top")
-        _lapor(progress, 55, "Sheet banding pengupahan selesai")
+    _lebarkan_kolom(ws, [12, 26, 16, 20, 16, 16, 16, 14, 16])
+    return ws
 
-    if hasil_banding_bank:
-        ws2c = wb.create_sheet("Banding Transfer Bank")
-        _tulis_header(ws2c, ["Nama (dinormalisasi)", "Jumlah Transfer Bank", "Upah Bersih Struk Gaji",
-                              "Status", "Detail"])
-        _lebarkan_kolom(ws2c, [30, 20, 20, 34, 70])
-        n = len(hasil_banding_bank)
-        for r, h in enumerate(hasil_banding_bank, start=2):
-            ws2c.cell(r, 1, h.nama)
-            ws2c.cell(r, 2, h.jumlah_bank)
-            ws2c.cell(r, 3, h.jumlah_gaji)
-            ws2c.cell(r, 4, h.status)
-            ws2c.cell(r, 5, "; ".join(h.detail) if h.detail else "")
-            fill = OK_FILL if h.status == "COCOK" else (
-                MODE_FILL if h.status in ("TIDAK DITRANSFER (UPAH 0 - WAJAR)",) else BAD_FILL)
-            for c in range(1, 6):
-                ws2c.cell(r, c).fill = fill
-                ws2c.cell(r, c).alignment = Alignment(wrap_text=True, vertical="top")
-        _lapor(progress, 58, "Sheet banding transfer bank selesai")
 
-    ws3 = wb.create_sheet("Ringkasan")
+def _tulis_sheet_bank(wb, data_bank):
+    """Sheet data mentah hasil bank_transfer_parser.parse_transfer_bank()."""
+    ws = wb.create_sheet("Transfer Bank")
+    ws["A1"] = "TRANSFER BANK — Data Mentah Hasil Parse"
+    ws["A1"].font = TITLE_FONT
+    ws["A2"] = "Satu baris = satu transaksi transfer pada file Excel bank"
+    ws["A2"].font = SUBTITLE_FONT
+    ws.merge_cells("A2:F2")
+
+    kolom = ["Trx ID", "Tipe Transfer", "No. Rekening", "Nama Penerima", "Jumlah",
+             "NIP (dokumen)", "Remark", "Email Penerima", "Swift Code"]
+    _tulis_header(ws, kolom, baris=4)
+
+    for r, b in enumerate(data_bank or [], start=5):
+        nilai = [
+            b.get("trx_id"), b.get("transfer_type"), b.get("credited_account"),
+            b.get("nama"), b.get("jumlah"), b.get("nip"), b.get("remark"),
+            b.get("email"), b.get("swift_code"),
+        ]
+        _tulis_baris(ws, r, nilai)
+
+    _lebarkan_kolom(ws, [14, 16, 18, 26, 14, 16, 26, 24, 14])
+    return ws
+
+
+def _tulis_sheet_ringkasan(wb, mode, ringkasan_banding, ringkasan_banding_pengupahan,
+                           ringkasan_banding_bank):
+    ws = wb.active
+    ws.title = "Ringkasan"
+
+    ws["A1"] = "Pemeriksa Absensi & Struk Gaji — PT. URASE PRIMA"
+    ws["A1"].font = TITLE_FONT
+    ws["A2"] = f"Diekspor: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    ws["A2"].font = SUBTITLE_FONT
+    ws.merge_cells("A1:D1")
+    ws.merge_cells("A2:D2")
+
     label, aturan = rules.deskripsi_mode(mode)
-    ws3.cell(1, 1, "Ringkasan Hasil Banding").font = Font(bold=True, size=13)
     baris = [
         ("Mode pemrosesan", (ringkasan_banding or {}).get("mode") or mode),
         ("Label mode", label),
@@ -185,22 +201,27 @@ def ekspor_hasil(path_output, anomali_absensi=None, hasil_banding=None, ringkasa
     ]
     if ringkasan_banding:
         baris += [
-            ("Total karyawan dibandingkan", ringkasan_banding.get("total")),
+            ("Total karyawan dibandingkan (absensi vs gaji)", ringkasan_banding.get("total")),
             ("Cocok / sinkron", ringkasan_banding.get("cocok")),
             ("Tidak sinkron (perlu diperbaiki)", ringkasan_banding.get("tidak_sinkron")),
             ("Hanya ada di data absensi", ringkasan_banding.get("hanya_di_absensi")),
             ("Hanya ada di struk gaji", ringkasan_banding.get("hanya_di_struk_gaji")),
         ]
-    for i, (judul, val) in enumerate(baris, start=3):
-        ws3.cell(i, 1, judul)
-        ws3.cell(i, 2, val)
-        if i <= 5:
-            ws3.cell(i, 1).fill = MODE_FILL
-            ws3.cell(i, 2).fill = MODE_FILL
+
+    baris_ke = 4
+    ws.cell(baris_ke, 1, "Ringkasan Banding Absensi vs Struk Gaji").font = Font(bold=True, size=12, color="173B7A")
+    baris_ke += 1
+    for judul, val in baris:
+        ws.cell(baris_ke, 1, judul)
+        ws.cell(baris_ke, 2, val)
+        ws.cell(baris_ke, 1).fill = MODE_FILL
+        ws.cell(baris_ke, 2).fill = MODE_FILL
+        baris_ke += 1
 
     if ringkasan_banding_pengupahan:
-        baris_awal = len(baris) + 4
-        ws3.cell(baris_awal, 1, "Ringkasan Banding Pengupahan").font = Font(bold=True, size=13)
+        baris_ke += 2
+        ws.cell(baris_ke, 1, "Ringkasan Banding Pengupahan").font = Font(bold=True, size=12, color="173B7A")
+        baris_ke += 1
         baris_pu = [
             ("Total karyawan dibandingkan (pengupahan)", ringkasan_banding_pengupahan.get("total")),
             ("Cocok / sinkron (pengupahan)", ringkasan_banding_pengupahan.get("cocok")),
@@ -208,16 +229,15 @@ def ekspor_hasil(path_output, anomali_absensi=None, hasil_banding=None, ringkasa
             ("Hanya ada di laporan pengupahan", ringkasan_banding_pengupahan.get("hanya_di_pengupahan")),
             ("Hanya ada di struk gaji (pengupahan)", ringkasan_banding_pengupahan.get("hanya_di_struk_gaji")),
         ]
-        for j, (judul, val) in enumerate(baris_pu, start=baris_awal + 1):
-            ws3.cell(j, 1, judul)
-            ws3.cell(j, 2, val)
-        baris_akhir_pu = baris_awal + len(baris_pu)
-    else:
-        baris_akhir_pu = len(baris) + 3
+        for judul, val in baris_pu:
+            ws.cell(baris_ke, 1, judul)
+            ws.cell(baris_ke, 2, val)
+            baris_ke += 1
 
     if ringkasan_banding_bank:
-        baris_awal_bank = baris_akhir_pu + 3
-        ws3.cell(baris_awal_bank, 1, "Ringkasan Banding Transfer Bank").font = Font(bold=True, size=13)
+        baris_ke += 2
+        ws.cell(baris_ke, 1, "Ringkasan Banding Transfer Bank").font = Font(bold=True, size=12, color="173B7A")
+        baris_ke += 1
         baris_bank = [
             ("Total nama dibandingkan (transfer bank)", ringkasan_banding_bank.get("total")),
             ("Cocok / sinkron (transfer bank)", ringkasan_banding_bank.get("cocok")),
@@ -227,16 +247,110 @@ def ekspor_hasil(path_output, anomali_absensi=None, hasil_banding=None, ringkasa
             ("Hanya ada di struk gaji (belum ditransfer)", ringkasan_banding_bank.get("hanya_di_struk_gaji")),
             ("Ambigu - nama kembar", ringkasan_banding_bank.get("ambigu")),
         ]
-        for j, (judul, val) in enumerate(baris_bank, start=baris_awal_bank + 1):
-            ws3.cell(j, 1, judul)
-            ws3.cell(j, 2, val)
+        for judul, val in baris_bank:
+            ws.cell(baris_ke, 1, judul)
+            ws.cell(baris_ke, 2, val)
+            baris_ke += 1
 
-    _lebarkan_kolom(ws3, [36, 50])
-    _lapor(progress, 60, "Sheet ringkasan selesai")
+    baris_ke += 3
+    ws.cell(baris_ke, 1, "Pemeriksa Absensi & Struk Gaji").font = Font(italic=True, size=9, color="9AA5B5")
+    baris_ke += 1
+    ws.cell(baris_ke, 1, "Dirancang oleh Handrian Rivaldi — github.com/HandrianRivaldi74").font = \
+        Font(italic=True, size=9, color="9AA5B5")
 
+    _lebarkan_kolom(ws, [42, 22, 16, 16])
+    return ws
+
+
+def ekspor_hasil(path_output, anomali_absensi=None, hasil_banding=None, ringkasan_banding=None,
+                 data_gaji=None, mode=None, progress=None,
+                 data_pengupahan=None, hasil_banding_pengupahan=None, ringkasan_banding_pengupahan=None,
+                 data_bank=None, hasil_banding_bank=None, ringkasan_banding_bank=None):
+    _lapor(progress, 2, "Menyiapkan workbook Excel...")
+    wb = Workbook()
+    mode = rules.normalisasi_mode(
+        mode if mode is not None else (ringkasan_banding or {}).get("mode")
+    )
+
+    # ===== 1. Ringkasan (cover, sheet aktif pertama) =====
+    _tulis_sheet_ringkasan(wb, mode, ringkasan_banding, ringkasan_banding_pengupahan, ringkasan_banding_bank)
+    _lapor(progress, 8, "Sheet ringkasan selesai")
+
+    # ===== 2. Anomali Absensi =====
+    ws1 = wb.create_sheet("Anomali Absensi")
+    _tulis_header(ws1, ["NRP", "Nama", "Aturan", "Detail", "Tanggal"])
+    _lebarkan_kolom(ws1, [12, 28, 24, 60, 10])
+    if anomali_absensi:
+        n = len(anomali_absensi)
+        for r, a in enumerate(anomali_absensi, start=2):
+            _tulis_baris(ws1, r, [a.nrp, a.nama, a.aturan, a.detail, a.tanggal],
+                        fill=BAD_FILL, font=BAD_FONT)
+            if r % 20 == 0:
+                _lapor(progress, 10 + int(12 * (r - 1) / n), f"Ekspor anomali {r - 1}/{n}")
+    _lapor(progress, 22, "Sheet anomali selesai")
+
+    # ===== 3. Banding Absensi vs Struk Gaji =====
+    ws2 = wb.create_sheet("Banding Absensi vs Gaji")
+    _tulis_header(ws2, ["NRP", "Nama (Absensi)", "Nama (Struk Gaji)", "Status",
+                        "Mode", "Sumber HKP", "Detail Perbedaan"])
+    _lebarkan_kolom(ws2, [12, 26, 26, 16, 14, 36, 70])
+    if hasil_banding:
+        n = len(hasil_banding)
+        for r, h in enumerate(hasil_banding, start=2):
+            fill, font = _fill_status(h.status)
+            _tulis_baris(ws2, r, [
+                h.nrp, h.nama_absensi, h.nama_gaji, h.status,
+                getattr(h, "mode", "") or "", getattr(h, "sumber_hkp", "") or "",
+                "; ".join(h.detail) if h.detail else "",
+            ], fill=fill, font=font)
+            if r % 20 == 0:
+                _lapor(progress, 25 + int(12 * (r - 1) / n), f"Ekspor banding absensi {r - 1}/{n}")
+    _lapor(progress, 38, "Sheet banding absensi selesai")
+
+    # ===== 4. Struk Gaji =====
     if data_gaji:
         _tulis_sheet_struk(wb, data_gaji, mode)
-        _lapor(progress, 90, "Sheet struk gaji selesai")
+        _lapor(progress, 48, "Sheet struk gaji selesai")
+
+    # ===== 5. Laporan Pengupahan (data mentah) =====
+    if data_pengupahan:
+        _tulis_sheet_pengupahan(wb, data_pengupahan)
+        _lapor(progress, 58, "Sheet laporan pengupahan selesai")
+
+    # ===== 6. Banding Pengupahan =====
+    if hasil_banding_pengupahan:
+        ws5 = wb.create_sheet("Banding Pengupahan")
+        _tulis_header(ws5, ["NRP", "Nama (Laporan Pengupahan)", "Nama (Struk Gaji)",
+                            "Status", "Detail Perbedaan"])
+        _lebarkan_kolom(ws5, [12, 30, 30, 20, 80])
+        n = len(hasil_banding_pengupahan)
+        for r, h in enumerate(hasil_banding_pengupahan, start=2):
+            fill, font = _fill_status(h.status)
+            _tulis_baris(ws5, r, [
+                h.nrp, h.nama_pengupahan, h.nama_gaji, h.status,
+                "; ".join(h.detail) if h.detail else "",
+            ], fill=fill, font=font)
+        _lapor(progress, 68, "Sheet banding pengupahan selesai")
+
+    # ===== 7. Transfer Bank (data mentah) =====
+    if data_bank:
+        _tulis_sheet_bank(wb, data_bank)
+        _lapor(progress, 78, "Sheet transfer bank selesai")
+
+    # ===== 8. Banding Transfer Bank =====
+    if hasil_banding_bank:
+        ws7 = wb.create_sheet("Banding Transfer Bank")
+        _tulis_header(ws7, ["Nama (dinormalisasi)", "Jumlah Transfer Bank", "Upah Bersih Struk Gaji",
+                            "Status", "Detail"])
+        _lebarkan_kolom(ws7, [30, 20, 20, 38, 70])
+        n = len(hasil_banding_bank)
+        for r, h in enumerate(hasil_banding_bank, start=2):
+            fill, font = _fill_status(h.status)
+            _tulis_baris(ws7, r, [
+                h.nama, h.jumlah_bank, h.jumlah_gaji, h.status,
+                "; ".join(h.detail) if h.detail else "",
+            ], fill=fill, font=font)
+        _lapor(progress, 90, "Sheet banding transfer bank selesai")
 
     _lapor(progress, 95, "Menyimpan file Excel...")
     wb.save(path_output)
